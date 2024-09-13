@@ -50,8 +50,6 @@ void thread_function(void *args)
     if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
         exit_with_err("pthread_mutex_lock", err);
 
-    // printf("[B%u] avviato e pronto\n", td->thread_n + 1);
-
     td->sh->start = td->sh->start - 1;
 
     // sveglio il thread J
@@ -245,7 +243,7 @@ int main(int argc, char **argv)
         if ((err = pthread_cond_signal(&sh->cond_b)) != 0)
             exit_with_err("pthread_cond_signal", err);
 
-    printf("[J] sono state svolte %d aste di cui %d andate assegnate e %d andate a vuoto; il totale raccolto e' di %d EUR\n", sh->num_asta-1, aste_valide, sh->num_asta-aste_valide-1, totale_raccolto);
+    printf("[J] sono state svolte %d aste di cui %d andate assegnate e %d andate a vuoto; il totale raccolto e' di %d EUR\n", sh->num_asta - 1, aste_valide, sh->num_asta - aste_valide - 1, totale_raccolto);
 
     // rilascio il look
     if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
