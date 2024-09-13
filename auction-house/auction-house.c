@@ -21,6 +21,7 @@ typedef struct
     // cond
     int start;
     int done;
+    int end;
 
     // strumenti per la sincronizzazione e la mutua esclusione
     pthread_mutex_t lock;
@@ -49,7 +50,7 @@ void thread_function(void *args)
     if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
         exit_with_err("pthread_mutex_lock", err);
 
-    printf("[B%u] avviato e pronto\n", td->thread_n + 1);
+    // printf("[B%u] avviato e pronto\n", td->thread_n + 1);
 
     td->sh->start = td->sh->start - 1;
 
@@ -67,27 +68,27 @@ void thread_function(void *args)
         if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
             exit_with_err("pthread_mutex_lock", err);
 
-        // verifico le condizioni di operabilità
-        while (td->offerte_fatte >= td->sh->num_asta || td->sh->done != 1)
+        while (td->offerte_fatte == td->sh->num_asta || td->sh->done != 1 && td->sh->end == 0)
         {
-            //printf("[B%u] aspetto perche' offerte_fatte %d > num_asta %d\n", td->thread_n + 1, td->offerte_fatte, td->sh->num_asta);
             if ((err = pthread_cond_wait(&td->sh->cond_b, &td->sh->lock)) != 0)
                 exit_with_err("pthread_cond_wait", err);
         }
 
-        
+        // verifico se devo terminare
+        if (td->sh->end == 1)
+        {
+            if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+                exit_with_err("pthread_mutex_unlock", err);
+            break;
+        }
+
+        td->sh->offer = (rand() % td->sh->maximum_offer) + 1;
         td->offerte_fatte++;
-        td->sh->id_richiedente = td->thread_n+1;
+        td->sh->id_richiedente = td->thread_n + 1;
 
-        int max = td->sh->maximum_offer;
-        r = (rand() % max )+ 1;
-        td->sh->offer = r;
-
-        printf("[B%u] invio offerta di %d EUR per asta n.%d\n", td->thread_n + 1, td->sh->offer, td->sh->num_asta);
-
+        printf("[B%d] invio offerta di %d EUR\n", td->thread_n + 1, td->sh->offer);
         td->sh->start = td->sh->start - 1;
 
-        // sveglio il thread J
         if ((err = pthread_cond_signal(&td->sh->cond_j)) != 0)
             exit_with_err("pthread_cond_signal", err);
 
@@ -124,6 +125,7 @@ int main(int argc, char **argv)
 
     // init shared
     sh->start = bidders;
+    sh->end = 0;
     sh->num_asta = 1;
     sh->done = 0;
 
@@ -158,19 +160,24 @@ int main(int argc, char **argv)
         if ((err = pthread_cond_wait(&sh->cond_j, &sh->lock)) != 0)
             exit_with_err("pthread_cond_wait", err);
 
-    sh->done = 1;
-
     // rilascio il look
     if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
         exit_with_err("pthread_mutex_unlock", err);
 
-    printf("[J] Possono iniziare le aste\n");
-
     // leggo il file riga per riga
-    int i = 0;
+    int totale_raccolto = 0;
+    int aste_valide = 0;
+    int offerte_valide;
+    int max_offer;
+    int max_id_bidder;
+
     char buffer[LINE_SIZE];
     while (fgets(buffer, LINE_SIZE, f))
     {
+        offerte_valide = 0;
+        max_offer = 0;
+        max_id_bidder = 0;
+
         // ottengo il lock
         if ((err = pthread_mutex_lock(&sh->lock)) != 0)
             exit_with_err("pthread_mutex_lock", err);
@@ -181,10 +188,7 @@ int main(int argc, char **argv)
         sh->start = bidders;
 
         printf("[J] lancio l'asta n.%d per %s con offerta minima di %d EUR e massima di %d EUR\n", sh->num_asta, sh->name, sh->minimum_offer, sh->maximum_offer);
-
-        // sveglio tutti i thread
-        if ((err = pthread_cond_broadcast(&sh->cond_b)) != 0)
-            exit_with_err("pthread_cond_broadcast", err);
+        sh->done = 1;
 
         // rilascio il look
         if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
@@ -194,31 +198,58 @@ int main(int argc, char **argv)
         if ((err = pthread_mutex_lock(&sh->lock)) != 0)
             exit_with_err("pthread_mutex_lock", err);
 
-        // verifico le condizioni di operabilità
         while (sh->start != 0)
         {
+            if ((err = pthread_cond_signal(&sh->cond_b)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+
             if ((err = pthread_cond_wait(&sh->cond_j, &sh->lock)) != 0)
                 exit_with_err("pthread_cond_wait", err);
 
             printf("[J] ricevuta offerta da B%d\n", sh->id_richiedente);
-
-            // verificare offerta
-
-            // sveglio tutti i thread
-            if ((err = pthread_cond_broadcast(&sh->cond_b)) != 0)
-                exit_with_err("pthread_cond_broadcast", err);
+            if (sh->offer >= sh->minimum_offer)
+            {
+                offerte_valide++;
+                if (sh->offer > max_offer)
+                {
+                    max_offer = sh->offer;
+                    max_id_bidder = sh->id_richiedente;
+                }
+            }
         }
 
-        printf("[J] l'asta n.%d per %s si è conclusa\n\n", sh->num_asta, sh->name);
+        if (offerte_valide > 0)
+        {
+            printf("[J] l'asta n.%d per %s si è conclusa con %d offerte valide su %d; il vincitore e' B%d che si aggiudica l'oggetto per %d EUR\n\n", sh->num_asta, sh->name, offerte_valide, bidders, max_id_bidder, max_offer);
+            aste_valide++;
+        }
+        else
+            printf("[J] l'asta n.%d per %s si e' conclusa senza alcuna offerta valida pertanto l'oggetto non risulta assegnato\n\n", sh->num_asta, sh->name);
+
         sh->num_asta++;
-        sh->done = 0;
+        totale_raccolto = totale_raccolto + max_offer;
 
         // rilascio il look
         if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
             exit_with_err("pthread_mutex_unlock", err);
-
-        i++;
     }
+
+    // ottengo il lock
+    if ((err = pthread_mutex_lock(&sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    sh->done = 1;
+    sh->end = 1;
+    // comunico che le aste sono finite
+    for (int i = 0; i < bidders; i++)
+        if ((err = pthread_cond_signal(&sh->cond_b)) != 0)
+            exit_with_err("pthread_cond_signal", err);
+
+    printf("[J] sono state svolte %d aste di cui %d andate assegnate e %d andate a vuoto; il totale raccolto e' di %d EUR\n", sh->num_asta-1, aste_valide, sh->num_asta-aste_valide-1, totale_raccolto);
+
+    // rilascio il look
+    if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
 
     // join
     for (int i = 0; i < bidders; i++)
