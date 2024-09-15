@@ -2,7 +2,7 @@
 
 Creare un programma alpha-stats.c in linguaggio C che accetti invocazioni sulla riga di comando del tipo
 
-alpha-stats <file.txt>
+`alpha-stats <file.txt>`
 
 Il programma sostanzialmente leggerà il file di testo indicato e riporterà il numero di occorrenze riscontrate per tutte le lettere dell'alfabeto inglese.
 
