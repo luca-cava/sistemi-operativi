@@ -6,7 +6,7 @@ Creare un programma alpha-stats.c in linguaggio C che accetti invocazioni sulla 
 
 Il programma sostanzialmente leggerà il file di testo indicato e riporterà il numero di occorrenze riscontrate per tutte le lettere dell'alfabeto inglese.
 
-Il thread padre P, creerà due thread AL e MZ. Tutti i thread condivideranno una struttura dati condivisa contenente
+Il thread padre **P**, creerà due thread **AL** e **MZ**. Tutti i thread condivideranno una struttura dati condivisa contenente
 
     c: un char/byte;
     stats: un array di 26 unsigned long inizialmente posti a zero;
