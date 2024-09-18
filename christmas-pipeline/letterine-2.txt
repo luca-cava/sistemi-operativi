@@ -145,7 +145,7 @@ Milvia;Tappo
 Renato;Tartaruga
 Ludovica;Occhiali
 Rosario;Armadio
-Salvatore;ThÃ©
+Salvatore;The
 Manola;Notte
 Raffaello;Forbici
 Nora;Chiave

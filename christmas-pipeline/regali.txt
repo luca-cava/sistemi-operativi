@@ -26,7 +26,7 @@ Bottone;15
 Budino;12
 Burro;9
 Cacao;17
-Caffè;6
+Caffe;6
 Calze;15
 Calzettoni;9
 Camicia;14
@@ -170,7 +170,7 @@ Tazza;8
 Telefono;10
 Televisione;8
 Termometro;19
-Thè;8
+The;8
 Torta;7
 Tortellini;7
 Treno;19

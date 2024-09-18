@@ -1,6 +1,6 @@
 Elio;Pentola
 Italo;Candeline
-Eva;Thè
+Eva;The
 Leandro;Fazzoletto
 Iacopo;Secchiello
 Federica;Trottola
@@ -165,7 +165,7 @@ Francesco;Orecchio
 Edi;Bandiera
 Iole;Acqua
 Camilla;Culla
-Gian Carlo;ThÃ©
+Gian Carlo;The
 Ivana;Asciugamano
 Angiolo;Collana
 Gemma;Scarpe
@@ -229,7 +229,7 @@ Licia;Panna
 Costanza;Bicicletta
 Gioele;Forno
 Gaetano;Vino
-Alessia;Thè
+Alessia;The
 Halyna;Pane
 Alex;Mattina
 Ferdinando;Spaghetti
@@ -272,7 +272,7 @@ Antonello;Barca
 Annita;Pigiama
 Antonietta;Pigiama
 Giuliano;Pistola
-Attilio;Caffè
+Attilio;Caffe
 Donata;Panino
 Fosca;Fagioli
 Domenica;Guanti

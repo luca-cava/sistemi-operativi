@@ -1,33 +1,37 @@
 #include "lib/lib-misc.h"
 #include <pthread.h>
 #include <unistd.h>
-#include <stdio.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include <ctype.h>
 
-#define NAME 50
+#define SIZE_NOME_BAMBINO 50
+#define SIZE_NOME_REGALO 50
 #define BUFFER_SIZE 100
 
 typedef enum
 {
+    BLOCK,
+    RESULT,
     ES,
     BN,
     EI,
     EP,
     EC
-} turno;
+} operation;
 
 typedef struct
 {
-    char nome_bambino[NAME];
-    char nome_regalo[NAME];
+    char nome_bambino[SIZE_NOME_BAMBINO];
+    char nome_regalo[SIZE_NOME_REGALO];
     int comportamento;
-    int costo_regalo;
+    unsigned int costo_regalo;
+    operation op;
 
-    turno turn;
+    unsigned int exit;
     int all;
 
-    // strumenti per la sincronizzazione e la mutua esclusione
+    // strumenti sincronizzazione e mutua esclusione
     pthread_mutex_t lock;
     pthread_cond_t cond_all;
     pthread_cond_t cond_ES;
@@ -35,7 +39,6 @@ typedef struct
     pthread_cond_t cond_EI;
     pthread_cond_t cond_EP;
     pthread_cond_t cond_EC;
-
 } shared;
 
 typedef struct
@@ -43,7 +46,6 @@ typedef struct
     // dati privati
     pthread_t tid;
     int thread_n;
-    int ruolo;
     char *input_file;
 
     // dati condivisi
@@ -52,14 +54,14 @@ typedef struct
 
 typedef struct
 {
-    char nome[NAME];
+    char nome_bambino[SIZE_NOME_BAMBINO];
     int comportamento;
 } buono_cattivo;
 
 typedef struct
 {
-    char nome[NAME];
-    int costo;
+    char nome_regalo[SIZE_NOME_REGALO];
+    int costo_regalo;
 } regalo;
 
 void smistatore_thread(void *arg)
@@ -68,67 +70,150 @@ void smistatore_thread(void *arg)
     thread_data *td = (thread_data *)arg;
 
     FILE *f;
-    char buffer[BUFFER_SIZE];
-
-    // apro il file in sola lettura
     if ((f = fopen(td->input_file, "r")) == NULL)
-        exit_with_err("fopen", err);
+    {
+        fprintf(stderr, "File non trovato\n");
+        exit(EXIT_FAILURE);
+    }
+
+    if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    td->sh->all = td->sh->all - 1;
+
+    if ((err = pthread_cond_signal(&td->sh->cond_all)) != 0)
+        exit_with_err("pthread_cond_signal", err);
+
+    if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
 
     printf("[ES%d] leggo le letterine dal file '%s'\n", td->thread_n + 1, td->input_file);
 
+    char buffer[BUFFER_SIZE];
     while (fgets(buffer, BUFFER_SIZE, f))
     {
-        // ottengo il lock
+        char *save_ptr;
+        char *nome_bambino;
+        char *nome_regalo;
+
+        nome_bambino = strtok_r(buffer, ";", &save_ptr);
+        nome_regalo = strtok_r(NULL, ";", &save_ptr);
+        nome_regalo[strcspn(nome_regalo, "\n")] = '\0';
+
         if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
             exit_with_err("pthread_mutex_lock", err);
 
-        while (td->sh->turn != ES)
+        printf("[ES%d] il/la bambino/a '%s' desidera per Natale '%s'\n", td->thread_n + 1, nome_bambino, nome_regalo);
+
+        while (td->sh->op != ES)
         {
             if ((err = pthread_cond_wait(&td->sh->cond_ES, &td->sh->lock)) != 0)
                 exit_with_err("pthread_cond_wait", err);
         }
 
-        char *rest = buffer;
-        strcpy(td->sh->nome_bambino, strtok_r(buffer, ";", &rest));
+        td->sh->op = BN;
+        strcpy(td->sh->nome_bambino, nome_bambino);
+        strcpy(td->sh->nome_regalo, nome_regalo);
 
-        char *temp = strtok_r(NULL, ";", &rest);
-        temp[strcspn(temp, "\n")] = '\0';
-        strcpy(td->sh->nome_regalo, temp);
-
-        printf("[ES%d] il bambino '%s' per Natale desidera '%s'\n", td->thread_n + 1, td->sh->nome_bambino, td->sh->nome_regalo);
-
-        td->sh->turn = BN;
-        if((err = pthread_cond_signal(&td->sh->cond_BN)) != 0)
+        // sveglio il thread BN
+        if ((err = pthread_cond_signal(&td->sh->cond_BN)) != 0)
             exit_with_err("pthread_cond_signal", err);
 
-        // rilascio il lock
-        if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
-            exit_with_err("pthread_mutex_lock", err);
+        if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_unlock", err);
     }
+
+    if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    td->sh->exit = td->sh->exit - 1;
+
+    printf("[ES%d] non ho piu' letterine da consegnare\n", td->thread_n + 1);
+
+    if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
 }
 
-void babbonatale_thread(void *arg)
+void babbo_natale_thread(void *arg)
 {
     int err;
-    thread_data *td=(thread_data *)arg;
+    thread_data *td = (thread_data *)arg;
 
-    while(1)
+    if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    td->sh->all = td->sh->all - 1;
+
+    if ((err = pthread_cond_signal(&td->sh->cond_all)) != 0)
+        exit_with_err("pthread_cond_signal", err);
+
+    if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
+
+    while (1)
     {
-        // ottengo il lock
         if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
             exit_with_err("pthread_mutex_lock", err);
 
-        while(td->sh->turn != BN)
+        while (td->sh->op != BN && td->sh->op != BLOCK)
         {
-            printf("[BN] block\n");
-            if((err = pthread_cond_wait(&td->sh->cond_BN, &td->sh->lock)) != 0)
+            if ((err = pthread_cond_wait(&td->sh->cond_BN, &td->sh->lock)) != 0)
                 exit_with_err("pthread_cond_wait", err);
-            printf("[BN] controllo\n");
         }
 
-        printf("[BN] come si è comportato il bambino '%s'?\n", td->sh->nome_bambino);
+        if (td->sh->op == BLOCK)
+        {
+            printf("[BN] non ci sono piu' offerte da esaminare\n");
 
-        // rilascio il lock
+            if ((err = pthread_cond_signal(&td->sh->cond_EI)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+
+            if ((err = pthread_cond_signal(&td->sh->cond_EP)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+
+            if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+                exit_with_err("pthread_mutex_unlock", err);
+            break;
+        }
+
+        printf("[BN] come si e' comportato il/la bambino/a '%s'?\n", td->sh->nome_bambino);
+        td->sh->op = EI;
+
+        // sveglio il thread EI
+        if ((err = pthread_cond_signal(&td->sh->cond_EI)) != 0)
+            exit_with_err("pthread_cond_signal", err);
+
+        if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_unlock", err);
+
+        if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_lock", err);
+
+        while (td->sh->op != BN)
+        {
+            if ((err = pthread_cond_wait(&td->sh->cond_BN, &td->sh->lock)) != 0)
+                exit_with_err("pthread_cond_wait", err);
+        }
+
+        if (td->sh->comportamento == 0) // buono
+        {
+            printf("[BN] il/la bambino/a '%s' ricevera' il suo regalo '%s'\n", td->sh->nome_bambino, td->sh->nome_regalo);
+            td->sh->op = EP;
+
+            // sveglio il thread EP
+            if ((err = pthread_cond_signal(&td->sh->cond_EP)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+        }
+        else if (td->sh->comportamento == 1) // cattivo
+        {
+            printf("[BN] il/la bambino/a '%s' non ricevera' alcun regalo quest'anno!\n", td->sh->nome_bambino);
+            td->sh->op = EC;
+
+            // sveglio il thread EC
+            if ((err = pthread_cond_signal(&td->sh->cond_EC)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+        }
+
         if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
             exit_with_err("pthread_mutex_unlock", err);
     }
@@ -140,13 +225,14 @@ void indagatore_thread(void *arg)
     thread_data *td = (thread_data *)arg;
 
     FILE *f;
-    char buffer[BUFFER_SIZE];
-
-    // apro il file in sola lettura
     if ((f = fopen(td->input_file, "r")) == NULL)
-        exit_with_err("fopen", err);
+    {
+        fprintf(stderr, "File non trovato\n");
+        exit(EXIT_FAILURE);
+    }
 
     int rows = 0;
+    char buffer[BUFFER_SIZE];
     while (fgets(buffer, BUFFER_SIZE, f))
         rows++;
 
@@ -155,33 +241,32 @@ void indagatore_thread(void *arg)
         fprintf(stderr, "File vuoto\n");
         exit(EXIT_FAILURE);
     }
-
     rewind(f);
+
     buono_cattivo *arr = malloc(sizeof(buono_cattivo) * rows);
 
-    // leggo il file riga per riga
     int i = 0;
     while (fgets(buffer, BUFFER_SIZE, f))
     {
-        char *rest = buffer;
-        strcpy(arr[i].nome, strtok_r(buffer, ";", &rest));
+        char *save_ptr;
+        char *token;
+        token = strtok_r(buffer, ";", &save_ptr);
+        strcpy(arr[i].nome_bambino, token);
 
-        char *temp = strtok_r(NULL, ";", &rest);
-        temp[strcspn(temp, "\n")] = '\0';
+        token = strtok_r(NULL, ";", &save_ptr);
+        token[strcspn(token, "\n")] = '\0';
 
-        if (strcmp(temp, "cattivo") == 0)
-        {
+        if (strcmp(token, "buono") == 0)
             arr[i].comportamento = 0;
-        }
-        else if (strcmp(temp, "buono") == 0)
-        {
+        else if (strcmp(token, "cattivo") == 0)
             arr[i].comportamento = 1;
-        }
-        // printf("[EI] ho letto %s ; %d\n", arr[i].nome, arr[i].comportamento);
+
         i++;
     }
 
-    // ottengo il lock della struttura dati condivisa
+    fclose(f);
+    printf("[EI] ho caricato tutto\n");
+
     if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
         exit_with_err("pthread_mutex_lock", err);
 
@@ -190,14 +275,62 @@ void indagatore_thread(void *arg)
     if ((err = pthread_cond_signal(&td->sh->cond_all)) != 0)
         exit_with_err("pthread_cond_signal", err);
 
-    // ottengo il lock della struttura dati condivisa
     if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
         exit_with_err("pthread_mutex_unlock", err);
 
-    // chiudo il file
-    fclose(f);
+    while (1)
+    {
+        if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_lock", err);
 
-    free(arr);
+        while (td->sh->op != EI && td->sh->op != BLOCK)
+        {
+            if ((err = pthread_cond_wait(&td->sh->cond_EI, &td->sh->lock)) != 0)
+                exit_with_err("pthread_cond_wait", err);
+        }
+
+        if (td->sh->op == BLOCK)
+        {
+            if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+                exit_with_err("pthread_mutex_unlock", err);
+
+            free(arr);
+            break;
+        }
+
+        int found = 0;
+        for (int i = 0; i < rows; i++)
+        {
+            if (strcmp(arr[i].nome_bambino, td->sh->nome_bambino) == 0)
+            {
+                td->sh->comportamento = arr[i].comportamento;
+                found = 1;
+
+                if (arr[i].comportamento == 0)
+                    printf("[EI] il/la bambino/a '%s' e' stato buono quest'anno\n", td->sh->nome_bambino);
+                else if (arr[i].comportamento == 1)
+                    printf("[EI] il/la bambino/a '%s' e' stato cattivo quest'anno\n", td->sh->nome_bambino);
+
+                break;
+            }
+        }
+
+        if (found == 0)
+        {
+            fprintf(stderr, "Nome non trovato\n");
+            exit(EXIT_FAILURE);
+        }
+        else if (found == 1)
+        {
+            td->sh->op = BN;
+            // sveglio BN
+            if ((err = pthread_cond_signal(&td->sh->cond_BN)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+        }
+
+        if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_unlock", err);
+    }
 }
 
 void produttore_thread(void *arg)
@@ -206,13 +339,14 @@ void produttore_thread(void *arg)
     thread_data *td = (thread_data *)arg;
 
     FILE *f;
-    char buffer[BUFFER_SIZE];
-
-    // apro il file in sola lettura
     if ((f = fopen(td->input_file, "r")) == NULL)
-        exit_with_err("fopen", err);
+    {
+        fprintf(stderr, "File non trovato\n");
+        exit(EXIT_FAILURE);
+    }
 
     int rows = 0;
+    char buffer[BUFFER_SIZE];
     while (fgets(buffer, BUFFER_SIZE, f))
         rows++;
 
@@ -221,27 +355,27 @@ void produttore_thread(void *arg)
         fprintf(stderr, "File vuoto\n");
         exit(EXIT_FAILURE);
     }
-
     rewind(f);
-    regalo *vet = malloc(sizeof(regalo) * rows);
+
+    regalo *arr = malloc(sizeof(regalo) * rows);
 
     int i = 0;
     while (fgets(buffer, BUFFER_SIZE, f))
     {
-        char *rest = buffer;
-        strcpy(vet[i].nome, strtok_r(buffer, ";", &rest));
+        char *save_ptr;
+        char *token;
 
-        char *temp = strtok_r(NULL, ";", &rest);
-        temp[strcspn(temp, "\n")] = '\0';
+        token = strtok_r(buffer, ";", &save_ptr);
+        strcpy(arr[i].nome_regalo, token);
 
-        vet[i].costo = atoi(temp);
-
-        // printf("[EP] ho letto %s ; %d\n", vet[i].nome, vet[i].costo);
+        token = strtok_r(NULL, ";", &save_ptr);
+        arr[i].costo_regalo = atoi(token);
 
         i++;
     }
+    fclose(f);
+    printf("[EP] ho caricato tutto\n");
 
-    // ottengo il lock della struttura dati condivisa
     if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
         exit_with_err("pthread_mutex_lock", err);
 
@@ -250,67 +384,189 @@ void produttore_thread(void *arg)
     if ((err = pthread_cond_signal(&td->sh->cond_all)) != 0)
         exit_with_err("pthread_cond_signal", err);
 
-    // ottengo il lock della struttura dati condivisa
     if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
         exit_with_err("pthread_mutex_unlock", err);
 
-    // chiudo il file
-    fclose(f);
+    while (1)
+    {
+        if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_lock", err);
 
-    free(vet);
+        while (td->sh->op != EP && td->sh->op != BLOCK)
+        {
+            if ((err = pthread_cond_wait(&td->sh->cond_EP, &td->sh->lock)) != 0)
+                exit_with_err("pthread_cond_wait", err);
+        }
+
+        if (td->sh->op == BLOCK)
+        {
+            td->sh->op = RESULT;
+
+            if ((err = pthread_cond_signal(&td->sh->cond_EC)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+
+            if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+                exit_with_err("pthread_mutex_unlock", err);
+
+            free(arr);
+            break;
+        }
+
+        int found = 0;
+        for (int i = 0; i < rows; i++)
+        {
+            if (strcmp(arr[i].nome_regalo, td->sh->nome_regalo) == 0)
+            {
+                td->sh->costo_regalo = arr[i].costo_regalo;
+                found = 1;
+
+                printf("[EP] creo il regalo '%s' per il/la bambino/a '%s' al costo di %d EUR\n", td->sh->nome_regalo, td->sh->nome_bambino, td->sh->costo_regalo);
+
+                break;
+            }
+        }
+
+        if (found == 0)
+        {
+            fprintf(stderr, "Regalo non trovato\n");
+            exit(EXIT_FAILURE);
+        }
+        else if (found == 1)
+        {
+            td->sh->op = EC;
+            // sveglio il thread EC
+            if ((err = pthread_cond_signal(&td->sh->cond_EC)) != 0)
+                exit_with_err("pthread_cond_signal", err);
+        }
+
+        if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_unlock", err);
+    }
 }
 
 void contabile_thread(void *arg)
 {
     int err;
+    thread_data *td = (thread_data *)arg;
+
+    int num_lettere_ricevute = 0;
+    int num_bambini_buoni = 0;
+    int num_bambini_cattivi = 0;
+    int costo_totale_produzione = 0;
+
+    if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    td->sh->all = td->sh->all - 1;
+
+    if ((err = pthread_cond_signal(&td->sh->cond_all)) != 0)
+        exit_with_err("pthread_cond_signal", err);
+
+    if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
+
+    while (1)
+    {
+        if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_lock", err);
+
+        while (td->sh->op != EC && td->sh->op != RESULT)
+        {
+            if ((err = pthread_cond_wait(&td->sh->cond_EC, &td->sh->lock)) != 0)
+                exit_with_err("pthread_cond_wait", err);
+        }
+
+        if (td->sh->op == RESULT)
+        {
+            printf("[EC] quest'anno abbiamo ricevuto %d richieste da %d bambini buoni e da %d cattivi con un costo totale di produzione di %d EUR\n", num_lettere_ricevute, num_bambini_buoni, num_bambini_cattivi, costo_totale_produzione);
+            if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+                exit_with_err("pthread_mutex_unlock", err);
+            break;
+        }
+
+        num_lettere_ricevute++;
+        if (td->sh->comportamento == 0) // buono
+        {
+            num_bambini_buoni++;
+            costo_totale_produzione = costo_totale_produzione + td->sh->costo_regalo;
+
+            printf("[EC] aggiornate le statistiche dei bambini buoni (%d) e dei costi totali (%d EUR)\n", num_bambini_buoni, costo_totale_produzione);
+        }
+        else if (td->sh->comportamento == 1) // cattivo
+        {
+            num_bambini_cattivi++;
+            printf("[EC] aggiornate le statistiche dei bambini cattivi (%d)\n", num_bambini_cattivi);
+        }
+
+        if (td->sh->exit == 0)
+        {
+            td->sh->op = BLOCK;
+
+            if ((err = pthread_cond_signal(&td->sh->cond_BN)) != 0)
+                exit_with_err("pthread_cond_wait", err);
+        }
+        else
+        {
+            td->sh->op = ES;
+
+            // sveglio i thread ES
+            if ((err = pthread_cond_broadcast(&td->sh->cond_ES)) != 0)
+                exit_with_err("pthread_cond_broadcast", err);
+        }
+
+        if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+            exit_with_err("pthread_mutex_unlock", err);
+    }
 }
 
 int main(int argc, char **argv)
 {
     if (argc < 4)
     {
-        printf("Usage %s <presents-file> <goods-bads-file> <letters-file-1> [... letters-file-n]\n", argv[0]);
+        printf("Usage %s <presents-file> <good-bads-file> <letters-file-1> [... letters-file-n]\n", argv[0]);
         exit(EXIT_FAILURE);
     }
 
     int err;
 
-    thread_data td[4 + argc - 3];
+    int num_thread = (argc - 3) + 4;
+    thread_data td[num_thread];
     shared *sh = malloc(sizeof(shared));
 
-    sh->all = 2;
-    sh->turn = -1;
+    // init shared
+    sh->op = -1;
+    sh->all = num_thread;
+    sh->exit = argc - 3;
 
     // init mutex
     if ((err = pthread_mutex_init(&sh->lock, NULL)) != 0)
         exit_with_err("pthread_mutex_init", err);
 
     // init var cond
-    if ((err = pthread_cond_init(&sh->cond_all, 0)) != 0)
+    if ((err = pthread_cond_init(&sh->cond_all, NULL)) != 0)
         exit_with_err("pthread_cond_init", err);
 
-    if ((err = pthread_cond_init(&sh->cond_ES, 0)) != 0)
+    if ((err = pthread_cond_init(&sh->cond_ES, NULL)) != 0)
         exit_with_err("pthread_cond_init", err);
 
-    if ((err = pthread_cond_init(&sh->cond_BN, 0)) != 0)
+    if ((err = pthread_cond_init(&sh->cond_BN, NULL)) != 0)
         exit_with_err("pthread_cond_init", err);
 
-    if ((err = pthread_cond_init(&sh->cond_EI, 0)) != 0)
+    if ((err = pthread_cond_init(&sh->cond_EI, NULL)) != 0)
         exit_with_err("pthread_cond_init", err);
 
-    if ((err = pthread_cond_init(&sh->cond_EP, 0)) != 0)
+    if ((err = pthread_cond_init(&sh->cond_EP, NULL)) != 0)
         exit_with_err("pthread_cond_init", err);
 
-    if ((err = pthread_cond_init(&sh->cond_EC, 0)) != 0)
+    if ((err = pthread_cond_init(&sh->cond_EC, NULL)) != 0)
         exit_with_err("pthread_cond_init", err);
 
     // ES-i
     for (int i = 0; i < argc - 3; i++)
     {
         td[i].sh = sh;
-        td[i].ruolo = ES;
         td[i].thread_n = i;
-        td[i].input_file = argv[argc + i - 3];
+        td[i].input_file = argv[i + 3];
 
         if ((err = pthread_create(&td[i].tid, 0, (void *)smistatore_thread, &td[i])) != 0)
             exit_with_err("pthread_create", err);
@@ -318,53 +574,53 @@ int main(int argc, char **argv)
 
     // BN
     td[argc - 3].sh = sh;
-    td[argc - 3].ruolo = BN;
-
-    if ((err = pthread_create(&td[argc - 3].tid, 0, (void *)babbonatale_thread, &td[argc - 3])) != 0)
+    if ((err = pthread_create(&td[argc - 3].tid, 0, (void *)babbo_natale_thread, &td[argc - 3])) != 0)
         exit_with_err("pthread_create", err);
 
     // EI
     td[argc - 3 + 1].sh = sh;
-    td[argc - 3 + 1].ruolo = EI;
     td[argc - 3 + 1].input_file = argv[2];
-
     if ((err = pthread_create(&td[argc - 3 + 1].tid, 0, (void *)indagatore_thread, &td[argc - 3 + 1])) != 0)
         exit_with_err("pthread_create", err);
 
     // EP
     td[argc - 3 + 2].sh = sh;
-    td[argc - 3 + 2].ruolo = EP;
     td[argc - 3 + 2].input_file = argv[1];
-
     if ((err = pthread_create(&td[argc - 3 + 2].tid, 0, (void *)produttore_thread, &td[argc - 3 + 2])) != 0)
         exit_with_err("pthread_create", err);
 
     // EC
     td[argc - 3 + 3].sh = sh;
-    td[argc - 3 + 3].ruolo = EC;
-
     if ((err = pthread_create(&td[argc - 3 + 3].tid, 0, (void *)contabile_thread, &td[argc - 3 + 3])) != 0)
         exit_with_err("pthread_create", err);
 
-    // ottengo il lock
     if ((err = pthread_mutex_lock(&sh->lock)) != 0)
         exit_with_err("pthread_mutex_lock", err);
 
-    // verifico le condizioni di operabilità
     while (sh->all != 0)
+    {
         if ((err = pthread_cond_wait(&sh->cond_all, &sh->lock)) != 0)
             exit_with_err("pthread_cond_wait", err);
+    }
 
-    sh->turn = ES;
+    printf("[MAIN] tutti i thread creati sono pronti\n");
+
+    if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
+
+    if ((err = pthread_mutex_lock(&sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    sh->op = ES;
+
     if ((err = pthread_cond_broadcast(&sh->cond_ES)) != 0)
         exit_with_err("pthread_cond_broadcast", err);
 
-    // rilascio il lock
     if ((err = pthread_mutex_unlock(&sh->lock)) != 0)
         exit_with_err("pthread_mutex_unlock", err);
 
     // join
-    for (int i = 0; i < 4 + argc - 3; i++)
+    for (int i = 0; i < num_thread; i++)
     {
         if ((err = pthread_join(td[i].tid, NULL)) != 0)
             exit_with_err("pthread_join", err);
@@ -380,5 +636,5 @@ int main(int argc, char **argv)
     pthread_cond_destroy(&sh->cond_EC);
     free(sh);
 
-    printf("OK\n");
+    exit(EXIT_SUCCESS);
 }
