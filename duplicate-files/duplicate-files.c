@@ -20,6 +20,7 @@ typedef struct record
     unsigned long long dimensione_totale_file;
     unsigned long long offset;
     unsigned long long dimensione_effettiva_buffer;
+    unsigned int thread_n;
 
     // eventuale flag
 } record;
@@ -29,7 +30,8 @@ typedef struct
     record stack[MAX_RECORD];
     int top;
 
-    int *file_descriptor;
+    int reader_i;
+    int reader_num;
 
     // strumenti sincronizzazione e mutua esclusione
     pthread_mutex_t lock;
@@ -88,17 +90,13 @@ void reader_thread(void *arg)
 
         printf("[READER-%d] lettura del blocco di offset %llu di %llu byte\n", td->thread_n + 1, offset, (unsigned long long)bytes_da_leggere);
 
-        // offset = offset + (unsigned long long)bytes_da_leggere;
-
         memcpy(buffer, p + i, bytes_da_leggere);
 
         // Creo record
-        struct record r = {"", "", (unsigned long long)sb.st_size, offset, (unsigned long long)bytes_da_leggere};
+        struct record r = {"", "", (unsigned long long)sb.st_size, offset, (unsigned long long)bytes_da_leggere, td->thread_n};
         strcpy(r.buffer, buffer);
 
         r.filename = td->input_file;
-
-        //printf("READER %s\n", r.buffer);
 
         if ((err = sem_wait(&td->sh->empty)))
             exit_with_err("sem_wait", err);
@@ -119,7 +117,7 @@ void reader_thread(void *arg)
         dimensione_rimanente = dimensione_rimanente - bytes_da_leggere;
     }
 
-    printf("[READER-%d] lettura del file '%s' completata. OFFSET: %llu\n", td->thread_n + 1, td->input_file, offset);
+    printf("[READER-%d] lettura del file '%s' completata\n", td->thread_n + 1, td->input_file);
 
     if (munmap(p, sb.st_size) == -1)
         exit_with_sys_err("munmap");
@@ -129,6 +127,25 @@ void writer_thread(void *arg)
 {
     int err;
     thread_data *td = (thread_data *)arg;
+
+    int reader_num = 0;
+    int file_duplicati = 0;
+
+    if ((err = pthread_mutex_lock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_lock", err);
+
+    reader_num = td->sh->reader_num;
+
+    if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
+        exit_with_err("pthread_mutex_unlock", err);
+
+    unsigned long long dimensione_duplicata_file[reader_num];
+    int check_open_file[reader_num];
+    for (int i = 0; i < reader_num; i++)
+    {
+        dimensione_duplicata_file[i] = 0;
+        check_open_file[i] = 0;
+    }
 
     if (mkdir(td->input_file, 0777) == -1)
         printf("[WRITER] la cartella esiste gia'\n");
@@ -148,46 +165,71 @@ void writer_thread(void *arg)
         td->sh->top--;
         char file[BUFFER_SIZE];
 
+        char temp[BUFFER_SIZE];
+        strcpy(temp, r.filename);
+        char *token;
+        char *last_token;
+
+        token = strtok(temp, "/");
+        while (token != NULL)
+        {
+            last_token = token;
+            token = strtok(NULL, "/");
+        }
+
         strcpy(file, td->input_file);
         strcat(file, "/");
-        strcat(file, r.filename);
-        
-        if ((fd = open(file, O_RDWR | O_CREAT , 0777)) == -1)
+        strcat(file, last_token);
+
+        if (check_open_file[r.thread_n] == 0)
         {
-            /*close(fd);
-            if ((fd = open(r.filename, O_RDWR | O_CREAT, 0777)) == -1)
-                exit_with_sys_err(r.filename);
+            check_open_file[r.thread_n] = 1;
+
+            if ((fd = open(file, O_RDWR | O_CREAT | O_TRUNC, 0777)) == -1)
+                exit_with_sys_err(file);
+
+            printf("[WRITER] creazione del file '%s' di dimensione %llu byte\n", file, r.dimensione_totale_file);
 
             if (ftruncate(fd, r.dimensione_totale_file) == -1)
                 exit_with_sys_err("ftruncate");
-
-            printf("[WRITER] creazione del file '%s' di dimensione %llu byte\n", r.filename, r.dimensione_totale_file);*/
-
-            break;
         }
-
-
-        printf("[WRITER] scrittura del blocco di offset %llu di %llu byte sul file '%s'\n", r.offset, r.dimensione_effettiva_buffer, r.filename);
-
-        if (ftruncate(fd, r.dimensione_totale_file) == -1)
-                exit_with_sys_err("ftruncate");
+        else if (check_open_file[r.thread_n] == 1)
+        {
+            if ((fd = open(file, O_RDWR, 0777)) == -1)
+                exit_with_sys_err(file);
+        }
 
         char *p;
         if ((p = mmap(NULL, r.dimensione_totale_file, PROT_WRITE | PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED)
             exit_with_err_msg("mmap writer");
 
+        if (close(fd) == -1)
+            exit_with_sys_err("close");
+
         memcpy(p + r.offset, r.buffer, r.dimensione_effettiva_buffer);
         if (msync(p, r.dimensione_totale_file, MS_SYNC) == -1)
             exit_with_sys_err("msync");
 
-        munmap(p, r.dimensione_effettiva_buffer);
-        close(fd);
+        printf("[WRITER] scrittura del blocco di offset %llu di %llu byte sul file '%s'\n", r.offset, r.dimensione_effettiva_buffer, file);
+
+        if (munmap(p, r.dimensione_totale_file) == -1)
+            exit_with_sys_err("munmap");
+
+        dimensione_duplicata_file[r.thread_n] = dimensione_duplicata_file[r.thread_n] + r.dimensione_effettiva_buffer;
+        if (dimensione_duplicata_file[r.thread_n] == r.dimensione_totale_file)
+        {
+            file_duplicati++;
+            printf("[WRITER] scrittura del file '%s' completata\n", file);
+        }
 
         if ((err = pthread_mutex_unlock(&td->sh->lock)) != 0)
             exit_with_err("pthread_mutex_unlock", err);
 
         if ((err = sem_post(&td->sh->empty)))
             exit_with_err("sem_post", err);
+
+        if (file_duplicati == reader_num)
+            break;
     }
 }
 
@@ -207,8 +249,7 @@ int main(int argc, char **argv)
     shared *sh = malloc(sizeof(shared));
 
     // init shared
-    sh->file_descriptor = malloc(sizeof(int) * (argc - 2));
-    memset(sh->file_descriptor, -1, argc-2);
+    sh->reader_num = argc - 2;
     sh->top = -1;
 
     // init mutex
@@ -252,6 +293,8 @@ int main(int argc, char **argv)
     sem_destroy(&sh->full);
 
     free(sh);
+
+    printf("[MAIN] duplicazione dei %d file completata\n", argc - 2);
 
     exit(EXIT_SUCCESS);
 }
