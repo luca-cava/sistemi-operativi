@@ -303,8 +303,6 @@ void player_thread(void *arg)
             exit_with_err("sem_post", err);
     }
 
-    int num_cinquine = 0;
-
     while (1)
     {
         /*if((err = sem_wait(&td->sh->sem_r)) != 0)
@@ -352,7 +350,6 @@ void player_thread(void *arg)
                                 print_card(td->cards[i]);
                                 //print_card(td->check[i]);
                                 td->sh->done_cinquina = 1;
-                                num_cinquine++;
                                 break;
                             }
                         }
